@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 import re
 
-# Define data models
 class LabTest(BaseModel):
     test_name: str
     test_value: str
@@ -15,46 +14,36 @@ class LabTest(BaseModel):
     test_unit: str
     lab_test_out_of_range: bool
 
-# Initialize FastAPI app
 app = FastAPI(title="Lab Test Extraction API")
 
-# Initialize EasyOCR reader (only once, at startup)
 reader = easyocr.Reader(['en'])
 
 def preprocess_image(image_bytes):
-    """Preprocess the image to improve OCR accuracy"""
-    # Convert bytes to numpy array
+
     nparr = np.frombuffer(image_bytes, np.uint8)
-    # Decode the image
+
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
-    # Convert to grayscale
+
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Apply adaptive thresholding
+
     binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                   cv2.THRESH_BINARY, 11, 2)
     
-    # Noise removal
     kernel = np.ones((1, 1), np.uint8)
     opening = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
     
     return opening
 
 def extract_lab_tests(text_results):
-    """Extract lab test information from OCR results"""
     lab_tests = []
-    
-    # Various patterns to match lab test entries
+
     patterns = [
-        # Pattern for "Test Name: Value Unit (Min-Max)"
         r"([A-Za-z\s\(\)]+):\s*([0-9\.]+)\s*([a-zA-Z/%]+)?\s*\(([0-9\.]+)\s*-\s*([0-9\.]+)\)",
-        
-        # Pattern for "Test Name Value Unit Min-Max"
+
         r"([A-Za-z\s\(\)]+)\s+([0-9\.]+)\s+([a-zA-Z/%]+)\s+([0-9\.]+)\s*-\s*([0-9\.]+)"
     ]
     
-    # Process each line of text
     for line in text_results:
         for pattern in patterns:
             matches = re.findall(pattern, line)
@@ -67,7 +56,7 @@ def extract_lab_tests(text_results):
                 
                 bio_reference_range = f"{min_range}-{max_range}"
                 
-                # Calculate if test is out of range
+
                 try:
                     value_float = float(test_value)
                     lab_test_out_of_range = value_float < min_range or value_float > max_range
@@ -105,9 +94,14 @@ async def main():
             <button type="submit">Process Image</button>
         </form>
         
+        <div id="rawTextSection">
+            <h2 class="section-title">Recognized Raw Text:</h2>
+            <pre id="rawText">Upload an image to see the raw text...</pre>
+        </div>
+        
         <div id="results">
-            <h2>Extracted Lab Test Data:</h2>
-            <pre id="jsonResult"></pre>
+            <h2 class="section-title">Extracted Lab Test Data:</h2>
+            <pre id="jsonResult">Upload an image to see processed results...</pre>
         </div>
 
         <script>
@@ -119,16 +113,25 @@ async def main():
                 formData.append('file', fileInput.files[0]);
                 
                 try {
+                    document.getElementById('rawText').textContent = "Processing...";
+                    document.getElementById('jsonResult').textContent = "Processing...";
+                    
                     const response = await fetch('/get-lab-tests', {
                         method: 'POST',
                         body: formData
                     });
                     
                     const data = await response.json();
+                    
+                    // Display the raw recognized text
+                    document.getElementById('rawText').textContent = data.recognized_text.join('\\n');
+                    
+                    // Display the processed results
                     document.getElementById('jsonResult').textContent = JSON.stringify(data, null, 2);
-                    document.getElementById('results').style.display = 'block';
                 } catch (error) {
                     console.error('Error:', error);
+                    document.getElementById('rawText').textContent = "Error processing image";
+                    document.getElementById('jsonResult').textContent = "Error processing image";
                     alert('An error occurred while processing the image.');
                 }
             });
@@ -140,25 +143,16 @@ async def main():
 
 @app.post("/get-lab-tests")
 async def get_lab_tests(file: UploadFile = File(...)):
-    """
-    Process lab report image and extract test data
-    """
-    try:
-        # Read the file content
+
+    try:        
         contents = await file.read()
-        
-        # Preprocess the image
+
         processed_img = preprocess_image(contents)
-        
-        # Perform OCR on the image
         results = reader.readtext(processed_img, detail=0)
-        
-        # Extract lab test data
         lab_tests = extract_lab_tests(results)
-        
-        # Return the response
         return {
             "is_success": True,
+            "recognized_text": results,  
             "data": [test.dict() for test in lab_tests]
         }
     
@@ -173,4 +167,4 @@ async def get_lab_tests(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run('main:app', port=8000)
